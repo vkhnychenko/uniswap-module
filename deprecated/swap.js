@@ -1,8 +1,8 @@
 import { ethers } from "ethers"
 import abi from '@uniswap/v3-periphery/artifacts/contracts/SwapRouter.sol/SwapRouter.json' assert {type: 'json'}
 import { getProvider, getWalletAddress, createWallet } from './providers.js'
-import { MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS, GAS_LIMIT, NETWORKS } from './constants.js'
-import {currentChainId, nativeToken, logger} from './config.js'
+import { MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS, GAS_LIMIT, NETWORKS } from '../constants.js'
+import {currentChainId, nativeToken, logger} from '../config.js'
 import Web3 from 'web3';
 import yesno from 'yesno'
 import dotenv from 'dotenv'

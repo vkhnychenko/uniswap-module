@@ -1,4 +1,4 @@
-import { ERC20_ABI, MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS, NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, V3_SWAP_ROUTER_ADDRESS, getTokenInfo, GAS_LIMIT} from './constants.js'
+import { ERC20_ABI, MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS, NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, V3_SWAP_ROUTER_ADDRESS, getTokenInfo, GAS_LIMIT} from '../constants.js'
 import { ethers } from 'ethers'
 import { NonfungiblePositionManager,  } from '@uniswap/v3-sdk'
 import {
@@ -6,8 +6,8 @@ import {
     Pool,
     Position,
   } from '@uniswap/v3-sdk'
-import { CurrentConfig, logger } from './config.js'
-import { getProvider, getWalletAddress, createWallet } from './providers.js'
+import { CurrentConfig, logger } from '../config.js'
+import { getProvider, getWalletAddress, createWallet } from '../src/provider.js'
 import { Percent, CurrencyAmount, Fraction } from '@uniswap/sdk-core'
 import { constructNewPosition, getCurrentPosition, getPositionInfo } from './position.js'
 import {AlphaRouter, SwapType} from '@uniswap/smart-order-router'

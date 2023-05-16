@@ -1,6 +1,6 @@
-import {TOKEN0, TOKEN1, FEE, logger} from './config.js'
+import {TOKEN0, TOKEN1, FEE, logger} from '../config.js'
 import { ethers } from "ethers"
-import {Uniswap} from './uniswap.js'
+import {Uniswap} from '../src/uniswap.js'
 // import dotenv from 'dotenv'
 // dotenv.config()
 

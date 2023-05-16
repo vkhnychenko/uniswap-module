@@ -13,3 +13,6 @@ client/node_modules
 client/.next
 data/*
 logs/*
+.DS_Store
+.vscode
+.idea

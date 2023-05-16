@@ -5,6 +5,7 @@ import dotenv from 'dotenv'
 import moment from 'moment'
 import {authenticate} from '@google-cloud/local-auth'
 import {google} from 'googleapis'
+import { sendMessageToTelegram } from "./telegramBot.js"
 
 dotenv.config()
 
@@ -102,24 +103,30 @@ async function readSheet(auth, listName) {
  * @param {Array} data
  */
 export async function writeSheet(listName, data){
-  const auth = await authorize()
-  const sheets = google.sheets({version: 'v4', auth});
-  const resource = {
-    'values': [data]
+  try{
+    const auth = await authorize()
+    const sheets = google.sheets({version: 'v4', auth});
+    const resource = {
+      'values': [data]
+    }
+    const res = await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${listName}!A1:T1`,
+      valueInputOption: "USER_ENTERED",
+      resource
+    });
+    console.log(res)
+  } catch (e){
+    console.log(e.message)
+    await sendMessageToTelegram(`Ошибка при записи информации в таблицу: ${SPREADSHEET_ID}. data: ${data}`)
   }
-  const res = await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${listName}!A1:T1`,
-    valueInputOption: "USER_ENTERED",
-    resource
-  });
-  console.log(res)
 }
 
 async function main(){
   console.log(CREDENTIALS_PATH)
   const client = await authorize()
-  await readSheet(client, 'Invest')
+  console.log('clietn', client)
+  // await readSheet(client, 'Invest')
   const currentDate = moment().format('DD.MM.YYYY');
   const data = [currentDate, 'test address', 'test token', 'test amount', 'test price']
   await writeSheet('Liqudity', data)

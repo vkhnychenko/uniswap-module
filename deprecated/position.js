@@ -6,17 +6,17 @@ import {
   Position,
 } from '@uniswap/v3-sdk'
 import { BigNumber, ethers } from 'ethers'
-import { CurrentConfig, logger } from './config.js'
+import { CurrentConfig, logger } from '../config.js'
 import {
   ERC20_ABI,
   MAX_FEE_PER_GAS,
   MAX_PRIORITY_FEE_PER_GAS,
   NONFUNGIBLE_POSITION_MANAGER_ABI,
   NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
-} from './constants.js'
-import { TOKEN_AMOUNT_TO_APPROVE_FOR_TRANSFER } from './constants.js'
+} from '../constants.js'
+import { TOKEN_AMOUNT_TO_APPROVE_FOR_TRANSFER } from '../constants.js'
 import { getPoolInfo } from './pool.js'
-import { getProvider, sendTransaction, createWallet, getWalletAddress } from './providers.js'
+import { getProvider, sendTransaction, createWallet, getWalletAddress } from '../src/provider.js'
 
 const wallet = createWallet()
 

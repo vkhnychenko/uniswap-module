@@ -1,8 +1,8 @@
 import { ethers } from 'ethers'
-import { CurrentConfig } from './config.js'
+import { CurrentConfig } from '../config.js'
 import IUniswapV3PoolABI from '@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json' assert { type: "json" }
-import { POOL_FACTORY_CONTRACT_ADDRESS } from './constants.js'
-import { getProvider } from './providers.js'
+import { POOL_FACTORY_CONTRACT_ADDRESS } from '../constants.js'
+import { getProvider } from '../src/provider.js'
 import { computePoolAddress } from '@uniswap/v3-sdk'
 
 export async function getPoolInfo() {

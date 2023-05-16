@@ -34,3 +34,14 @@ export const NONFUNGIBLE_POSITION_MANAGER_ABI = [
 
   'function positions(uint256 tokenId) external view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
 ]
+
+export const NETWORKS = {
+  ARBITRUM: {
+      rpc: `https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+      chainId: 42161,
+      symbol: "ETH",
+      // explorerApiUrl: `https://api.arbiscan.io/api`,
+      // explorerApiKey: process.env.ETHERSCAN_ARBITRUM_API_KEY,
+      name: "Arbitrum",
+    }
+}
