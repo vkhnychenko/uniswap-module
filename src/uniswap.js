@@ -8,8 +8,9 @@ import { nearestUsableTick, NonfungiblePositionManager, Pool, Position, computeP
 import {AlphaRouter, SwapType} from '@uniswap/smart-order-router'
 import { ERC20_ABI, NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, NONFUNGIBLE_POSITION_MANAGER_ABI, V3_SWAP_ROUTER_ADDRESS_02, POOL_FACTORY_CONTRACT_ADDRESS } from '../constants.js'
 import {logger, TICK_UPPER_MULTIPLIER, TICK_LOWER_MULTIPLIER, MAX_PRICE_COEFFICIENT, MIN_PRICE_COEFFICIENT, MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS, MIN_SUM_BALANCE,
-    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, GAS_LIMIT, CHAIN_NAME} from '../config.js'
+    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, GAS_LIMIT, CHAIN_NAME, MIN_DIFFERENCE_SUM} from '../config.js'
 import { Connection } from "./provider.js";
+import { sendMessageToTelegram } from "./telegramBot.js";
 import dotenv from 'dotenv'
 dotenv.config()
 
@@ -27,15 +28,7 @@ export class Uniswap {
         this.connection = new Connection(CHAIN_NAME, process.env.WALLET_PRIVATE_KEY)
     }
 
-    async test(){
-        await this.connection.getGasPrice()
-    }
-
     async getPoolInfo(){
-        // if (!this.provider) {
-        //     throw new Error('No provider')
-        // }
-
         const currentPoolAddress = computePoolAddress({
             factoryAddress: POOL_FACTORY_CONTRACT_ADDRESS,
             tokenA: this.token0,
@@ -129,10 +122,6 @@ export class Uniswap {
     }
 
     async checkApproval({token, spender, rawAmount}){
-        // if (!this.wallet.address || !this.provider) {
-        //     return 'Failed'
-        // }
-
         logger.info(`token transfer approval for: ${token.symbol}`)
         const tokenContract = new ethers.Contract(token.address, ERC20_ABI, this.connection.wallet)
 
@@ -140,7 +129,6 @@ export class Uniswap {
         const allowance = ethers.utils.formatUnits(rawAllowance, token.decimals)
         const amount = ethers.utils.formatUnits(rawAmount, token.decimals) 
 
-        console.log('rawAmount', +rawAmount)
         logger.info(`allowance: ${+allowance} - amount: ${+amount}` )
 
         if (+allowance >= +amount){
@@ -234,9 +222,6 @@ export class Uniswap {
 
 
     async mintPosition(){
-        // if (!this.wallet.address || !this.provider) {
-        //     return 'Failed'
-        // }
         logger.info(`start mintPosition`)
 
         const {balance0, balance1} = await this.getTokenBalances()
@@ -275,11 +260,9 @@ export class Uniswap {
             to: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
             value: value,
             gasLimit: this.gasLimit,
-            // maxFeePerGas: this.maxFeePerGas,
-            // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
         }
 
-        const txStatus = await this.connection.sendTransaction({txInfo, chainName: CHAIN_NAME});
+        const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
         if (txStatus != 1){
             logger.error('Mint position transaction error!')
@@ -369,7 +352,7 @@ export class Uniswap {
             value: route?.methodParameters?.value,
         }
 
-        const txStatus = await this.connection.sendTransaction({txInfo, chainName: CHAIN_NAME});
+        const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
         if (txStatus != 1){
             logger.error('swap transaction error!')
@@ -405,12 +388,10 @@ export class Uniswap {
     }
 
     async removeLiquidity(positionId, poolInfo, positionInfo){
-
         logger.info(`start remove Liquidity ${positionId}`)
     
         const currentPosition = await this.getCurrentPosition(poolInfo, positionInfo)
-
-        logger.info('currentPosition', currentPosition)
+        logger.info(currentPosition)
     
         const collectOptions = {
             expectedCurrencyOwed0: CurrencyAmount.fromRawAmount(this.token0, 0),
@@ -444,14 +425,15 @@ export class Uniswap {
             // gasLimit: this.gasLimit,
         }
 
-        const txStatus = await this.connection.sendTransaction({txInfo, chainName: CHAIN_NAME});
+        const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
         if (txStatus != 1){
             logger.error('remove liquidity error!')
             return
         }
 
-        //TODO write sheets
+        await sendMessageToTelegram(`Произошел вывод ликвидности для кошелька: ${this.connection.wallet.address} - номер позиции: ${positionId}`)
+
     
         // const tx = await this.connection.wallet.sendTransaction(transaction);
     
@@ -485,42 +467,71 @@ export class Uniswap {
     }
 
     async prepareBalanceAndMintPosition(){
-        const {rawBalance0, balance0, rawBalance1, balance1} = await this.getTokenBalances()
+        const {balance0, balance1} = await this.getTokenBalances()
         const {price0, price1} = await this.getTokenPrices()
-        const sum0 = price0 * balance0 - MIN_BALANCE_TOKEN0
-        const sum1 = price1 * balance1 - MIN_BALANCE_TOKEN1
-        logger.info('price0', price0)
-        logger.info('price1', price1)
+        logger.info(`price0: ${price0}`)
+        logger.info(`price1: ${price1}`)
+        const sum0 = price0 * (balance0 - MIN_BALANCE_TOKEN0)
+        const sum1 = price1 * (balance1 - MIN_BALANCE_TOKEN1)
+        const differenceSum = Math.abs(sum0 - sum1)
 
         if (sum0 + sum1 <= MIN_SUM_BALANCE){
             logger.info('Balance not enough')
-            return 'False'
+            return false
         }
 
-        const priceCoefficient = sum0/sum1
-
-        if (priceCoefficient > MAX_PRICE_COEFFICIENT){
-            // 1200 - 1000 / 2 / 1820
-
-            const amountForSwap = (sum0 - sum1) / 2 / price0
-            logger.info('amountForSwap', amountForSwap)
-            const status = await this.swap(this.token0, this.token1, ethers.utils.parseUnits(amountForSwap.toFixed(this.token0.decimals), this.token0.decimals))
-            if (status != 1){
-                logger.error('Swap transaction error!', receipt)
-                return
+        if (differenceSum > MIN_DIFFERENCE_SUM){
+            let amountIn = 0
+            let tokenIn = ''
+            let tokenOut = ''
+            if (sum0 > sum1){
+                tokenIn = this.token0
+                tokenOut = this.token1
+                amountIn = differenceSum / 2 / price0
+            } else {
+                tokenIn = this.token1
+                tokenOut = this.token0
+                amountIn = differenceSum / 2 / price1
             }
 
-        } else if (priceCoefficient < MIN_PRICE_COEFFICIENT){
-            // 800 - 1300 / 2 / 1.3
+            logger.info(`amountIn for swap: ${amountIn}`)
 
-            const amountForSwap = (sum1 - sum0) / 2 / price1
-            logger.info('amountForSwap', amountForSwap)
-            const status = await this.swap(this.token1, this.token0, ethers.utils.parseUnits(amountForSwap.toFixed(this.token1.decimals), this.token1.decimals))
+            if (amountIn == 0 || !tokenIn || !tokenOut){
+                logger.error('params for swap error')
+                return false
+            }
+
+            const status = await this.swap(tokenIn, tokenOut, ethers.utils.parseUnits(amountIn.toFixed(tokenIn.decimals), tokenIn.decimals))
             if (status != 1){
-                logger.error('Swap transaction error!', receipt)
-                return
+                logger.error('Swap transaction error!')
+                return false
             }
         }
+
+        // const priceCoefficient = sum0/sum1
+
+        // if (priceCoefficient > MAX_PRICE_COEFFICIENT){
+        //     // 1200 - 1000 / 2 / 1820
+
+        //     const amountForSwap = (sum0 - sum1) / 2 / price0
+        //     logger.info('amountForSwap', amountForSwap)
+        //     const status = await this.swap(this.token0, this.token1, ethers.utils.parseUnits(amountForSwap.toFixed(this.token0.decimals), this.token0.decimals))
+        //     if (status != 1){
+        //         logger.error('Swap transaction error!', receipt)
+        //         return
+        //     }
+
+        // } else if (priceCoefficient < MIN_PRICE_COEFFICIENT){
+        //     // 800 - 1300 / 2 / 1.3
+
+        //     const amountForSwap = (sum1 - sum0) / 2 / price1
+        //     logger.info('amountForSwap', amountForSwap)
+        //     const status = await this.swap(this.token1, this.token0, ethers.utils.parseUnits(amountForSwap.toFixed(this.token1.decimals), this.token1.decimals))
+        //     if (status != 1){
+        //         logger.error('Swap transaction error!', receipt)
+        //         return
+        //     }
+        // }
         
         await this.mintPosition()
     }

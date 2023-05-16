@@ -6,7 +6,8 @@ import winston from 'winston'
 // export const nativeToken = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
 
 //Main configs
-export const CHAIN_NAME = 'ARBITRUM'
+export const MIN_SUM_BALANCE = 100 // USD
+export const MIN_DIFFERENCE_SUM = 50 // USD
 export const MIN_BALANCE_TOKEN0 = 0
 export const MIN_BALANCE_TOKEN1 = 20
 
@@ -14,17 +15,16 @@ export const MIN_BALANCE_TOKEN1 = 20
 export const TOKEN0 = new Token(SupportedChainId.ARBITRUM_ONE, '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', 18, 'WETH', 'ETH')
 export const TOKEN1 = new Token(SupportedChainId.ARBITRUM_ONE, '0x912CE59144191C1204E64559FE8253a0e49E6548', 18, 'ARB', 'ARB')
 export const FEE = FeeAmount.MEDIUM
-export const TICK_UPPER_MULTIPLIER = 25
-export const TICK_LOWER_MULTIPLIER = 25
+export const TICK_UPPER_MULTIPLIER = 20
+export const TICK_LOWER_MULTIPLIER = 20
 export const MAX_PRICE_COEFFICIENT = 1.2
 export const MIN_PRICE_COEFFICIENT = 0.8
 
 // Transactions
+export const CHAIN_NAME = 'ARBITRUM'
+export const GAS_LIMIT = 3_500_000
 export const MAX_FEE_PER_GAS = ethers.utils.parseUnits("0.3", 'gwei')
 export const MAX_PRIORITY_FEE_PER_GAS = ethers.utils.parseUnits("0.1", 'gwei')
-export const MIN_SUM_BALANCE = 100 // USD
-export const GAS_LIMIT = 3_500_000
-
 
 export const logger = winston.createLogger({
   level: 'info',

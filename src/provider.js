@@ -65,7 +65,7 @@
 import { ethers } from "ethers"
 import { NETWORKS } from "../constants.js"
 import { sendMessageToTelegram } from "./telegramBot.js"
-import { GAS_LIMIT } from "../config.js"
+import { GAS_LIMIT, logger } from "../config.js"
 
 
 export class Connection {
@@ -118,11 +118,11 @@ export class Connection {
     }
 
     async checkAvailableGas({gasPrice, gasLimit, value, chainName}){
-        const {rawNativeBalance} = await this.getNativeBalance()
-        logger.info('gasLimit', gasLimit)
+        const {rawNativeBalance, nativeBalance} = await this.getNativeBalance()
+        logger.info(`gasLimit: ${gasLimit}`)
         const needGas = gasPrice * gasLimit * 1.1 + +value
-        logger.info('raw native balance', +rawNativeBalance )
-        logger.info('needGas', needGas )
+        logger.info(`raw native balance: ${+rawNativeBalance}`)
+        logger.info(`needGas: ${needGas}`)
         if (+rawNativeBalance < needGas){
             logger.error('Gas not enough')
             await sendMessageToTelegram(`Недостаточно баланса для оплаты газа в сети ${chainName} для адреса ${this.wallet.address} - текущий баланс ${nativeBalance} - необходимо для транзакции: ${ethers.utils.formatEther(needGas)}`)
@@ -133,16 +133,17 @@ export class Connection {
     }
 
     async sendRawTransaction({txInfo, chainName}){
-        logger.info('txInfo', ...txInfo)
         const gasPrice = await this.getGasPrice()
         const nonce = await this.getNonce()
-        const gasStatus = await this.checkAvailableGas({gasPrice, gasLimit: GAS_LIMIT, value: txInfo.value, chainName})
 
-        if (!gasStatus){
+        logger.info(`Start raw transaction for wallet: ${this.wallet.address} in network: ${chainName}, gas: ${gasPrice}, gasLimit: ${GAS_LIMIT} - nonce: ${nonce}`)
+        logger.info(txInfo)
+
+        const gasAvailable = await this.checkAvailableGas({gasPrice, gasLimit: GAS_LIMIT, value: txInfo.value, chainName})
+
+        if (!gasAvailable){
             return 0
         }
-
-        logger.info(`Start raw transaction for wallet: ${this.wallet.address} in network: ${chainName}, gas: ${gasPrice}, gasLimit: ${gasLimit} - nonce: ${nonce}`)
 
         try {
 
@@ -154,44 +155,48 @@ export class Connection {
                 // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
                 ...txInfo
             });
-            logger.info(`tx for mint position:`, tx);
+            logger.info(tx);
             const receipt = await tx.wait();
-            logger.info(`receipt for mint position:`, receipt);
-            logger.info('status', receipt.status)
+            logger.info(receipt);
+            logger.info(`receipt status: ${receipt.status}`)
             return receipt.status
 
         } catch (e){
-            logger.error(`Error while send transaction`, e.message)
+            logger.error(`Error while send transaction" ${e.message}`)
             await sendMessageToTelegram(`Ошибка при выполнении транзакции с параметрами ${txInfo} для адреса ${this.wallet.address} в сети ${chainName}`)
         }
     }
 
     async sendTransaction({ method, params, value, gasLimit, chainName }){
-        logger.info('params', ...params)
         const gasPrice = await this.getGasPrice()
         const nonce = await this.getNonce()
-        const gasStatus = await this.checkAvailableGas({gasPrice, gasLimit, value, chainName})
 
-        if (!gasStatus){
+        logger.info(`Start transaction for wallet: ${this.wallet.address} in network: ${chainName}, gas: ${gasPrice}, gasLimit: ${gasLimit} - nonce: ${nonce}`)
+        logger.info(...params)
+
+        const gasAvailable = await this.checkAvailableGas({gasPrice, gasLimit, value, chainName})
+
+        if (!gasAvailable){
             return 0
         }
         
-        logger.info(`Start transaction for wallet: ${this.wallet.address} in network: ${chainName}, gas: ${gasPrice}, gasLimit: ${gasLimit} - nonce: ${nonce}`)
         try{
             const tx = await method(...params, {
                 from: this.wallet.address,
                 value,
                 //gasLimit,
                 gasPrice,
-                nonce
+                nonce,
+                // maxFeePerGas: this.maxFeePerGas,
+                // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
             })
-            logger.info('tx', tx)
+            logger.info(tx)
             const receipt = await tx.wait();
-            logger.info("receipt: ", receipt);
-            logger.info("status: ", receipt.status);
+            logger.info(receipt);
+            logger.info(`receipt status: ${receipt.status}`);
             return receipt.status
         } catch(e){
-            logger.error(`Error while send transaction`, e.message)
+            logger.error(`Error while send transaction: ${e.message}`)
             await sendMessageToTelegram(`Ошибка при выполнении транзакции с параметрами ${params} для адреса ${this.wallet.address} в сети ${chainName}`)
         }
     }
