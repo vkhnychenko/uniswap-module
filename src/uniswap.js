@@ -105,18 +105,17 @@ export class Uniswap {
 
         const rawBalance0 = await token0Contract.balanceOf(this.connection.wallet.address)
         const balance0 = ethers.utils.formatUnits(rawBalance0, this.token0.decimals)
-        logger.info(`balance0: ${balance0}`)
-
+        
         const rawBalance1 = await token1Contract.balanceOf(this.connection.wallet.address)
         const balance1 = ethers.utils.formatUnits(rawBalance1, this.token1.decimals)
-        logger.info(`balance1: ${balance1}`)
+        logger.info(`balance0: ${balance0}, balance1: ${balance1}`)
 
         return {rawBalance0, balance0, rawBalance1, balance1}
     }
 
     async getTokenPrices(){
         const prices = await getPrices(`${this.token0.name},${this.token1.name}`)
-        logger.info('prices', prices)
+        logger.info(`price0: ${prices[`${this.token0.name}`]}, price1: ${prices[`${this.token1.name}`]}`)
 
         return {price0: prices[`${this.token0.name}`], price1: prices[`${this.token1.name}`]}
     }
@@ -469,8 +468,6 @@ export class Uniswap {
     async prepareBalanceAndMintPosition(){
         const {balance0, balance1} = await this.getTokenBalances()
         const {price0, price1} = await this.getTokenPrices()
-        logger.info(`price0: ${price0}`)
-        logger.info(`price1: ${price1}`)
         const sum0 = price0 * (balance0 - MIN_BALANCE_TOKEN0)
         const sum1 = price1 * (balance1 - MIN_BALANCE_TOKEN1)
         const differenceSum = Math.abs(sum0 - sum1)

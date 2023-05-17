@@ -1,5 +1,7 @@
 import { SupportedChainId, Token } from '@uniswap/sdk-core'
 import { ethers } from "ethers"
+import dotenv from 'dotenv'
+dotenv.config()
 
 // Currencies and Tokens
 
