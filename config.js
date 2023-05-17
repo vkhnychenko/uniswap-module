@@ -2,6 +2,11 @@ import { FeeAmount } from '@uniswap/v3-sdk'
 import { ethers } from "ethers"
 import { SupportedChainId, Token, Percent, CurrencyAmount, TradeType } from '@uniswap/sdk-core'
 import winston from 'winston'
+import dotenv from 'dotenv'
+dotenv.config()
+
+export const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN
+export const TELEGRAM_IDS = process.env.TELEGRAM_IDS.split(',')
 
 // export const nativeToken = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
 

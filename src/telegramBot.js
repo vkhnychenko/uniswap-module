@@ -1,8 +1,5 @@
 import {Telegraf} from 'telegraf'
-
-export const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN
-export const TELEGRAM_IDS = process.env.TELEGRAM_IDS.split(',')
-
+import { TELEGRAM_IDS, TELEGRAM_TOKEN } from '../config.js'
 
 const bot = new Telegraf(TELEGRAM_TOKEN)
 
