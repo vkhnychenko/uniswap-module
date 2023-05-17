@@ -137,7 +137,7 @@ export class Connection {
         const nonce = await this.getNonce()
 
         logger.info(`Start raw transaction for wallet: ${this.wallet.address} in network: ${chainName}, gas: ${gasPrice}, gasLimit: ${GAS_LIMIT} - nonce: ${nonce}`)
-        logger.info(txInfo)
+        logger.info(`txInfo: ${JSON.stringify(txInfo)}`)
 
         const gasAvailable = await this.checkAvailableGas({gasPrice, gasLimit: GAS_LIMIT, value: txInfo.value, chainName})
 

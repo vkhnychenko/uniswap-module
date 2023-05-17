@@ -66,8 +66,10 @@ if (differenceSum > minDifferenceSum){
 }
 
 async function main(){
-    logger.info('Start test')
-    await sendMessageToTelegram('Test')
+    logger.info(txInfo)
+    logger.info('tx info', txInfo)
+    logger.info(`tx info: ${JSON.stringify(txInfo, '.')}`)
+    // await sendMessageToTelegram('Test')
 }
 
 main()
