@@ -27,7 +27,7 @@ export const MIN_PRICE_COEFFICIENT = 0.8
 
 // Transactions
 export const CHAIN_NAME = 'ARBITRUM'
-export const GAS_LIMIT = 3_500_000
+export const GAS_LIMIT = 4_500_000
 export const MAX_FEE_PER_GAS = ethers.utils.parseUnits("0.3", 'gwei')
 export const MAX_PRIORITY_FEE_PER_GAS = ethers.utils.parseUnits("0.1", 'gwei')
 
