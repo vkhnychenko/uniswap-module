@@ -1,4 +1,5 @@
 import { logger } from "./config.js"
+import { sendMessageToTelegram } from "./src/telegramBot.js"
 
 const txInfo = {
     data: 1,
@@ -63,6 +64,13 @@ if (differenceSum > minDifferenceSum){
 
     ///
 }
+
+async function main(){
+    logger.info('Start test')
+    await sendMessageToTelegram('Test')
+}
+
+main()
 // console.log(sum0)
 // console.log(sum1)
 
