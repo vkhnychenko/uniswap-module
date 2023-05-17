@@ -89,7 +89,7 @@ export class Connection {
 
     async getGasPrice(){
         const gasPrice = await this.provider.getGasPrice()
-        logger.info('gasPrice', ethers.utils.formatUnits(gasPrice, 'gwei'))
+        logger.info(`gasPrice: ${ethers.utils.formatUnits(gasPrice, 'gwei')}`)
         return gasPrice
     }
 
@@ -149,21 +149,21 @@ export class Connection {
 
             const tx = await this.wallet.sendTransaction({
                 from: this.wallet.address,
-                gasLimit: GAS_LIMIT,
+                // gasLimit: GAS_LIMIT,
                 gasPrice,
                 // maxFeePerGas: this.maxFeePerGas,
                 // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
                 ...txInfo
             });
-            logger.info(tx);
+            logger.info(`tx: ${JSON.stringify(tx)}`)
             const receipt = await tx.wait();
-            logger.info(receipt);
-            logger.info(`receipt status: ${receipt.status}`)
+            logger.info(`receipt: ${JSON.stringify(receipt)}`);
+            logger.info(`receipt status: ${receipt.status}`);
             return receipt.status
 
         } catch (e){
             logger.error(`Error while send transaction" ${e.message}`)
-            await sendMessageToTelegram(`Ошибка при выполнении транзакции с параметрами ${txInfo} для адреса ${this.wallet.address} в сети ${chainName}`)
+            await sendMessageToTelegram(`Ошибка при выполнении транзакции с параметрами ${JSON.stringify(txInfo)} для адреса ${this.wallet.address} в сети ${chainName}`)
         }
     }
 
@@ -190,9 +190,9 @@ export class Connection {
                 // maxFeePerGas: this.maxFeePerGas,
                 // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
             })
-            logger.info(tx)
+            logger.info(`tx: ${JSON.stringify(tx)}`)
             const receipt = await tx.wait();
-            logger.info(receipt);
+            logger.info(`receipt: ${JSON.stringify(receipt)}`);
             logger.info(`receipt status: ${receipt.status}`);
             return receipt.status
         } catch(e){
