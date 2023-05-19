@@ -1,39 +1,25 @@
-import { logger } from "./config.js"
 import { sendMessageToTelegram } from "./src/telegramBot.js"
+import { Uniswap } from "./src/uniswap.js"
+import { TOKEN0,TOKEN1,FEE } from "./config.js"
 
-const txInfo = {
-    data: 1,
-    to: 2,
-    value: 3,
-    gasLimit: 4,
-    // maxFeePerGas: this.maxFeePerGas,
-    // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
-}
-
-// logger.info(`txInfo: ${txInfo.toString()}`)
-// logger.info(txInfo)
-// logger.info(`txInfo: ${txInfo.data}`)
-// logger.info(`txInfo:`, txInfo.data)
-
-const minTokenBalance0 = 20
+const minTokenBalance0 = 0
 const minTokenBalance1 = 0
-const minDifferenceSum = 20
+const minDifferenceSum = 200
 
 
-const price0 = 1.5
-const price1 = 1800
+const price0 = '1797.384940778154'
+const price1 = 1.151723798887287
 
-const balance0 = 3000 
-const balance1 = 1
+const balance0 = 5.38 
+const balance1 = 8399
 
 const sum0 = price0 * (balance0 - minTokenBalance0)
 const sum1 = price1 * (balance1 - minTokenBalance1) 
 
-// console.log(balance0 % balance1)
-// console.log(balance1 % balance0)
+console.log('sum0', sum0)
+console.log('sum1', sum1)
 const differenceSum = Math.abs(sum0 - sum1)
-console.log(differenceSum)
-console.log(Math.abs(sum1 - sum0))
+console.log('differenceSum', differenceSum)
 
 if (differenceSum > minDifferenceSum){
     let amountIn = 0
@@ -66,13 +52,14 @@ if (differenceSum > minDifferenceSum){
 }
 
 async function main(){
-    logger.info(txInfo)
-    logger.info('tx info', txInfo)
-    logger.info(`tx info: ${JSON.stringify(txInfo, '.')}`)
+    console.log(balance0.toFixed(2))
+    console.log(balance1.toFixed(2))
+    console.log(Math.round(sum0))
+    console.log(Math.round(sum1))
+    console.log((+price0).toPrecision(6))
+    const uniswap = new Uniswap(TOKEN0, TOKEN1, FEE);
+    await uniswap.swapAndMintPosition()
     // await sendMessageToTelegram('Test')
 }
 
 main()
-// console.log(sum0)
-// console.log(sum1)
-

@@ -1,6 +1,6 @@
 import { ethers } from "ethers"
 import moment from 'moment'
-import { Token, Percent, CurrencyAmount, TradeType } from '@uniswap/sdk-core'
+import { Token, Percent, CurrencyAmount, TradeType, Fraction } from '@uniswap/sdk-core'
 import { getPrices } from "./helpers.js";
 import {writeSheet} from './googleSheets.js'
 import IUniswapV3PoolABI from '@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json' assert { type: "json" }
@@ -135,7 +135,7 @@ export class Uniswap {
             return true
         }
 
-        const status = await this.connection.sendTransaction({method: tokenContract.approve, params: [spender, rawAmount], value: 0, chainName: CHAIN_NAME, gasLimit: GAS_LIMIT})
+        const status = await this.connection.sendTransaction({method: tokenContract.approve, params: [spender, rawAmount], value: 0, chainName: CHAIN_NAME})
         // const populateTransaction = await tokenContract.populateTransaction.approve(spender, rawAmount)
         // console.log('populateTransaction', populateTransaction)
 
@@ -195,6 +195,30 @@ export class Uniswap {
             amount0,
             amount1,
             useFullPrecision: true,
+        })
+    }
+
+    async constructPositionWithPlaceholderLiquidity({token0, token1}){
+        const poolInfo = await this.getPoolInfo()
+        
+        const configuredPool = new Pool(
+            token0,
+            token1,
+            poolInfo.fee,
+            poolInfo.sqrtPriceX96.toString(),
+            poolInfo.liquidity.toString(),
+            poolInfo.tick
+        )
+
+        const tickUpper = nearestUsableTick(poolInfo.tick, poolInfo.tickSpacing) + poolInfo.tickSpacing * this.tickUpperMultiplier
+        const tickLower = nearestUsableTick(poolInfo.tick, poolInfo.tickSpacing) - poolInfo.tickSpacing * this.tickLowerMultiplier
+
+        // create position using the maximum liquidity from input amounts
+        return new Position({
+            pool: configuredPool,
+            tickLower,
+            tickUpper,
+            liquidity: 1,
         })
     }
 
@@ -258,7 +282,7 @@ export class Uniswap {
             data: calldata,
             to: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
             value: value,
-            gasLimit: this.gasLimit,
+            // gasLimit: this.gasLimit,
         }
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
@@ -269,7 +293,7 @@ export class Uniswap {
         }
 
         const currentDate = moment().format('DD.MM.YYYY');
-        const data = [currentDate, this.connection.wallet.address, 'Deposit', this.token0.name, balance0, price0, balance0 * price0, this.token1.name, balance1, price1, balance1 * price1]
+        const data = [currentDate, this.connection.wallet.address, 'Deposit', this.token0.name, (+balance0).toPrecision(6), (+price0).toPrecision(5), Math.round(balance0 * price0), this.token1.name, (+balance1).toPrecision(6), (+price1).toPrecision(5), Math.round(balance1 * price1)]
         logger.info(`data for write sheets: ${data}`)
         await writeSheet('Liqudity', data)
     }
@@ -386,6 +410,35 @@ export class Uniswap {
     
     }
 
+    async swapAndMintPosition(){
+        const {balance0, balance1} = await this.getTokenBalances()
+        const prepareBalance0 = ethers.utils.parseUnits((balance0 - MIN_BALANCE_TOKEN0).toFixed(this.token0.decimals), this.token0.decimals) 
+        const prepareBalance1 = ethers.utils.parseUnits((balance1 - MIN_BALANCE_TOKEN1).toFixed(this.token1.decimals), this.token1.decimals)
+        const approvalStatus0 = await this.checkApproval({token: this.token0, spender: this.swapRouterAddress, rawAmount: prepareBalance0})
+        // const approvalStatus1 = await this.checkApproval({token: this.token1, spender: this.swapRouterAddress, rawAmount: prepareBalance1})
+        // if (!approvalStatus0 || approvalStatus1){
+        //     logger.error('approvals error')
+        //     return
+        // }
+        const network = await this.connection.provider.getNetwork()
+        const router = new AlphaRouter({ chainId: network.chainId, provider: this.connection.provider })
+        // const route = await router.route(
+        //     CurrencyAmount.fromRawAmount(tokenIn, amountIn),
+        //     tokenOut,
+        //     TradeType.EXACT_INPUT,
+        //     options
+        // )
+        const token0CurrencyAmount = CurrencyAmount.fromRawAmount(this.token0, prepareBalance0)
+        const token1CurrencyAmount = CurrencyAmount.fromRawAmount(this.token1, prepareBalance1)
+        console.log('token0CurrencyAmount', token0CurrencyAmount)
+        console.log('token1CurrencyAmount', token1CurrencyAmount)
+        const currentPosition = await constructPositionWithPlaceholderLiquidity({token0: this.token0, token1: this.token1})
+        const swapAndAddConfig = {
+            ratioErrorTolerance: new Fraction(1, 100),
+            maxIterations: 6,
+          }
+    }
+
     async removeLiquidity(positionId, poolInfo, positionInfo){
         logger.info(`start remove Liquidity ${positionId}`)
     
@@ -476,6 +529,8 @@ export class Uniswap {
             logger.info('Balance not enough')
             return false
         }
+
+        logger.info(`differenceSum: ${differenceSum}`)
 
         if (differenceSum > MIN_DIFFERENCE_SUM){
             let amountIn = 0
