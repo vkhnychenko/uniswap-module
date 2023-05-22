@@ -118,7 +118,11 @@ export async function writeSheet(listName, data){
     console.log(res)
   } catch (e){
     console.log(e.message)
-    await sendMessageToTelegram(`Ошибка при записи информации в таблицу: ${SPREADSHEET_ID}. data: ${data}`)
+    await sendMessageToTelegram(`
+      Ошибка при записи информации в таблицу: ${SPREADSHEET_ID}.\n
+      Data: ${data}\n
+      Error: ${e.message}`
+    )
   }
 }
 

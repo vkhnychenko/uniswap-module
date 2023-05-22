@@ -15,6 +15,8 @@ export const MIN_SUM_BALANCE = 100 // USD
 export const MIN_DIFFERENCE_SUM = 50 // USD
 export const MIN_BALANCE_TOKEN0 = 0
 export const MIN_BALANCE_TOKEN1 = 20
+export const MIN_BALANCE_TOKEN0_FOR_MINT = 0.01
+export const MIN_BALANCE_TOKEN1_FOR_MINT = 10
 
 // Pool info
 export const TOKEN0 = new Token(SupportedChainId.ARBITRUM_ONE, '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', 18, 'WETH', 'ETH')
@@ -22,12 +24,10 @@ export const TOKEN1 = new Token(SupportedChainId.ARBITRUM_ONE, '0x912CE59144191C
 export const FEE = FeeAmount.MEDIUM
 export const TICK_UPPER_MULTIPLIER = 20
 export const TICK_LOWER_MULTIPLIER = 20
-export const MAX_PRICE_COEFFICIENT = 1.2
-export const MIN_PRICE_COEFFICIENT = 0.8
 
 // Transactions
 export const CHAIN_NAME = 'ARBITRUM'
-export const GAS_LIMIT = 4_500_000
+export const DEFAULT_GAS_LIMIT = 6_000_000
 export const MAX_FEE_PER_GAS = ethers.utils.parseUnits("0.3", 'gwei')
 export const MAX_PRIORITY_FEE_PER_GAS = ethers.utils.parseUnits("0.1", 'gwei')
 
