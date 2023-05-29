@@ -20,7 +20,6 @@ npm run ...
 - TELEGRAM_TOKEN
 - TELEGRAM_IDS
 
-=======
 ### Config
 
 - TICK_UPPER_MULTIPLIER = 20
