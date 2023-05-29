@@ -1,11 +1,17 @@
 # uniswap
 
 ## Create google sheets
+
 create list with name: "Liquidity"
+
 ## Running scripts
+
 npm run ...
 
 ## ENV
+
+### Keys
+
 - WALLET_PRIVATE_KEY
 - COINMARKET_API_KEY
 - ALCHEMY_API_KEY
@@ -14,4 +20,14 @@ npm run ...
 - TELEGRAM_TOKEN
 - TELEGRAM_IDS
 
+=======
+### Config
 
+- TICK_UPPER_MULTIPLIER = 20
+- TICK_LOWER_MULTIPLIER = 20
+- MIN_SUM_BALANCE = 100 USD
+- MIN_DIFFERENCE_SUM = 50 USD
+- MIN_BALANCE_TOKEN0
+- MIN_BALANCE_TOKEN1
+- DEFAULT_GAS_LIMIT
+- RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY

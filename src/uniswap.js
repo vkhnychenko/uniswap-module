@@ -1,16 +1,17 @@
 import { ethers } from "ethers"
 import moment from 'moment'
-import { Token, Percent, CurrencyAmount, TradeType } from '@uniswap/sdk-core'
+import { Token, Percent, CurrencyAmount, TradeType, Fraction } from '@uniswap/sdk-core'
 import { getPrices } from "./helpers.js";
-import {writeSheet} from './googleSheets.js'
+import {writeSheet} from './sheets.js'
 import IUniswapV3PoolABI from '@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json' assert { type: "json" }
 import { nearestUsableTick, NonfungiblePositionManager, Pool, Position, computePoolAddress, FeeAmount } from '@uniswap/v3-sdk'
-import {AlphaRouter, SwapType} from '@uniswap/smart-order-router'
+import {AlphaRouter, SwapType, SwapToRatioStatus} from '@uniswap/smart-order-router'
 import { ERC20_ABI, NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, NONFUNGIBLE_POSITION_MANAGER_ABI, V3_SWAP_ROUTER_ADDRESS_02, POOL_FACTORY_CONTRACT_ADDRESS } from '../constants.js'
-import {logger, TICK_UPPER_MULTIPLIER, TICK_LOWER_MULTIPLIER, MAX_PRICE_COEFFICIENT, MIN_PRICE_COEFFICIENT, MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS, MIN_SUM_BALANCE,
-    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, GAS_LIMIT, CHAIN_NAME, MIN_DIFFERENCE_SUM} from '../config.js'
+import {logger, TICK_UPPER_MULTIPLIER, TICK_LOWER_MULTIPLIER, MIN_SUM_BALANCE,
+    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, DEFAULT_GAS_LIMIT, CHAIN_NAME, MIN_DIFFERENCE_SUM, MIN_BALANCE_TOKEN0_FOR_MINT, MIN_BALANCE_TOKEN1_FOR_MINT, RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY} from '../config.js'
 import { Connection } from "./provider.js";
 import { sendMessageToTelegram } from "./telegramBot.js";
+import { getTokenAmountsFromPool, sleep, randomIntInRange } from "./helpers.js";
 import dotenv from 'dotenv'
 dotenv.config()
 
@@ -19,9 +20,7 @@ export class Uniswap {
         this.token0 = token0;
         this.token1 = token1;
         this.fee = fee
-        this.gasLimit = GAS_LIMIT
-        this.maxFeePerGas = MAX_FEE_PER_GAS
-        this.maxPriorityFeePerGas = MAX_PRIORITY_FEE_PER_GAS
+        this.gasLimit = DEFAULT_GAS_LIMIT
         this.tickUpperMultiplier = TICK_UPPER_MULTIPLIER
         this.tickLowerMultiplier = TICK_LOWER_MULTIPLIER
         this.swapRouterAddress = V3_SWAP_ROUTER_ADDRESS_02
@@ -42,17 +41,58 @@ export class Uniswap {
             this.connection.provider
         )
 
-        const [token0, token1, fee, tickSpacing, liquidity, slot0] =
+        const [token0, token1, fee, tickSpacing, liquidity, slot0, feeGrowthGlobal0X128, feeGrowthGlobal1X128] =
             await Promise.all([
-            poolContract.token0(),
-            poolContract.token1(),
-            poolContract.fee(),
-            poolContract.tickSpacing(),
-            poolContract.liquidity(),
-            poolContract.slot0(),
+                poolContract.token0(),
+                poolContract.token1(),
+                poolContract.fee(),
+                poolContract.tickSpacing(),
+                poolContract.liquidity(),
+                poolContract.slot0(),
+                poolContract.feeGrowthGlobal0X128(),
+                poolContract.feeGrowthGlobal1X128()
             ])
 
-        return {token0, token1, fee, tickSpacing, liquidity, sqrtPriceX96: slot0[0], tick: slot0[1]}
+        return {token0, token1, fee, tickSpacing, liquidity, sqrtPriceX96: slot0.sqrtPriceX96.toString(), tick: slot0[1], feeGrowthGlobal0X128, feeGrowthGlobal1X128}
+    }
+
+    async getTickInfoFromPool(tick){
+        const currentPoolAddress = computePoolAddress({
+            factoryAddress: POOL_FACTORY_CONTRACT_ADDRESS,
+            tokenA: this.token0,
+            tokenB: this.token1,
+            fee: this.fee,
+        })
+
+        const poolContract = new ethers.Contract(
+            currentPoolAddress,
+            IUniswapV3PoolABI.abi,
+            this.connection.provider
+        )
+
+        const info = await poolContract.ticks(tick)
+        return {feeGrowthOutside0X128: info[2], feeGrowthOutside1X128: info[3]}
+    }
+
+    async checkRewards(positionId){
+        const {feeGrowthGlobal0X128, feeGrowthGlobal1X128} = await this.getPoolInfo()
+        const positionInfo = await this.getPositionInfo(positionId)
+
+        const {feeGrowthOutside0X128: feeGrowthOutside0X128_lower, feeGrowthOutside1X128: feeGrowthOutside1X128_lower} = await this.getTickInfoFromPool(positionInfo.tickLower)
+        const {feeGrowthOutside0X128: feeGrowthOutside0X128_upper, feeGrowthOutside1X128: feeGrowthOutside1X128_upper} = await this.getTickInfoFromPool(positionInfo.tickUpper)
+
+        const feeToken0 = ((feeGrowthGlobal0X128 - feeGrowthOutside0X128_lower - feeGrowthOutside0X128_upper - positionInfo.feeGrowthInside0LastX128)/(2**128))*positionInfo.liquidity/(1*10**this.token0.decimals)
+        const feeToken1 = ((feeGrowthGlobal1X128 - feeGrowthOutside1X128_lower - feeGrowthOutside1X128_upper - positionInfo.feeGrowthInside1LastX128)/(2**128))*positionInfo.liquidity/(1*10**this.token1.decimals)
+        logger.info(`feeToken0: ${feeToken0}, feeToken1: ${feeToken1}`)
+
+        await sendMessageToTelegram(`Накопленное вознаграждение для кошелька: ${this.connection.wallet.address}\nНомер позиции: ${positionId}\nToken0: ${this.token0.name} - награда: ${feeToken0}\nToken1: ${this.token1.name} - награда: ${feeToken1}`)
+
+        const currentDate = moment().format('DD.MM.YYYY');
+        const data = [currentDate, this.connection.wallet.address, this.token0.name, feeToken0, this.token1.name, feeToken1]
+        logger.info(`data for write sheets: ${data}`)
+        await writeSheet('Rewards', data)
+
+        return {feeToken0, feeToken1}
     }
 
     async getPositionInfo(positionId){
@@ -105,18 +145,17 @@ export class Uniswap {
 
         const rawBalance0 = await token0Contract.balanceOf(this.connection.wallet.address)
         const balance0 = ethers.utils.formatUnits(rawBalance0, this.token0.decimals)
-        logger.info(`balance0: ${balance0}`)
-
+        
         const rawBalance1 = await token1Contract.balanceOf(this.connection.wallet.address)
         const balance1 = ethers.utils.formatUnits(rawBalance1, this.token1.decimals)
-        logger.info(`balance1: ${balance1}`)
+        logger.info(`balance0: ${balance0}, balance1: ${balance1}`)
 
         return {rawBalance0, balance0, rawBalance1, balance1}
     }
 
     async getTokenPrices(){
         const prices = await getPrices(`${this.token0.name},${this.token1.name}`)
-        logger.info('prices', prices)
+        logger.info(`price0: ${prices[`${this.token0.name}`]}, price1: ${prices[`${this.token1.name}`]}`)
 
         return {price0: prices[`${this.token0.name}`], price1: prices[`${this.token1.name}`]}
     }
@@ -136,38 +175,21 @@ export class Uniswap {
             return true
         }
 
-        const status = await this.connection.sendTransaction({method: tokenContract.approve, params: [spender, rawAmount], value: 0, chainName: CHAIN_NAME, gasLimit: GAS_LIMIT})
-        // const populateTransaction = await tokenContract.populateTransaction.approve(spender, rawAmount)
-        // console.log('populateTransaction', populateTransaction)
+        const gasEstimated = await tokenContract.estimateGas.approve(spender, rawAmount);
+        console.log('gasEstimated for allowance', +gasEstimated)
+
+        const txInfo = {
+            value: 0,
+            gasLimit: gasEstimated
+        }
+
+        const status = await this.connection.sendTransaction({chainName: CHAIN_NAME, method: tokenContract.approve, params: [spender, rawAmount], txInfo})
 
         if (status != 1){
             return false
         }
 
         return true
-
-        // try {
-
-        //     let transaction = await tokenContract.populateTransaction.approve(spender, amount.toString())
-
-        //     transaction = {
-        //         gasLimit: this.gasLimit,
-        //         maxFeePerGas: this.maxFeePerGas,
-        //         maxPriorityFeePerGas: this.maxPriorityFeePerGas,
-        //         from: this.connection.wallet.address,
-        //         ...transaction,
-        //     }
-        
-        //     const tx = await this.connection.wallet.sendTransaction(transaction);
-        //     logger.info(`txInfo for token transfer approval:`, tx);
-
-        //     const receipt = await tx.wait();
-        //     logger.info(`receipt for token transfer approval:`, receipt);
-        
-        // } catch (e) {
-        //     console.error(e)
-        //     return 'Failed'
-        // }
     }
 
     async constructNewPosition(token0, token1, amount0, amount1) {
@@ -177,7 +199,7 @@ export class Uniswap {
             token0,
             token1,
             poolInfo.fee,
-            poolInfo.sqrtPriceX96.toString(),
+            poolInfo.sqrtPriceX96,
             poolInfo.liquidity.toString(),
             poolInfo.tick
         )
@@ -199,13 +221,39 @@ export class Uniswap {
         })
     }
 
+    async constructPositionWithPlaceholderLiquidity({token0, token1, positionInfo}){
+        const poolInfo = await this.getPoolInfo()
+        
+        const configuredPool = new Pool(
+            token0,
+            token1,
+            poolInfo.fee,
+            poolInfo.sqrtPriceX96,
+            poolInfo.liquidity.toString(),
+            poolInfo.tick
+        )
+
+        // const tickUpper = nearestUsableTick(poolInfo.tick, poolInfo.tickSpacing) + poolInfo.tickSpacing * this.tickUpperMultiplier
+        // const tickLower = nearestUsableTick(poolInfo.tick, poolInfo.tickSpacing) - poolInfo.tickSpacing * this.tickLowerMultiplier
+
+        const { tickLower, tickUpper } = positionInfo
+
+        // create position using the maximum liquidity from input amounts
+        return new Position({
+            pool: configuredPool,
+            tickLower,
+            tickUpper,
+            liquidity: 1,
+        })
+    }
+
     async getCurrentPosition(poolInfo, positionInfo){
 
         const configuredPool = new Pool(
             this.token0,
             this.token1,
             poolInfo.fee,
-            poolInfo.sqrtPriceX96.toString(),
+            poolInfo.sqrtPriceX96,
             poolInfo.liquidity.toString(),
             poolInfo.tick
         )
@@ -220,25 +268,41 @@ export class Uniswap {
         })
     }
 
+    async getLastActivePosition(){
+        const poolInfo = await this.getPoolInfo();
 
-    async mintPosition(){
+        const positionContract = new ethers.Contract(
+            NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
+            NONFUNGIBLE_POSITION_MANAGER_ABI,
+            this.connection.provider
+        )
+    
+        // Get number of positions
+        const balance = await positionContract.balanceOf(this.connection.wallet.address)
+    
+        for (let i = balance - 1; i >= 0; i--) {
+            const tokenOfOwnerByIndex = await positionContract.tokenOfOwnerByIndex(this.connection.wallet.address, i)
+            logger.info(`check positionId: ${tokenOfOwnerByIndex.toString()}`)
+            const positionInfo = await this.getPositionInfo(tokenOfOwnerByIndex.toString())
+            if (positionInfo.liquidity > 0 && positionInfo.tickUpper > poolInfo.tick &&  poolInfo.tick > positionInfo.tickLower){
+                return tokenOfOwnerByIndex.toString()
+            }
+        }
+    }
+
+
+    async mintPosition({rawToken0Amount, rawToken1Amount}){
         logger.info(`start mintPosition`)
-
-        const {balance0, balance1} = await this.getTokenBalances()
-        const {price0, price1} = await this.getTokenPrices()
-
-        const prepareBalance0 = ethers.utils.parseUnits((balance0 - MIN_BALANCE_TOKEN0).toFixed(this.token0.decimals), this.token0.decimals) 
-        const prepareBalance1 = ethers.utils.parseUnits((balance1 - MIN_BALANCE_TOKEN1).toFixed(this.token1.decimals), this.token1.decimals)
         
-        const approvalStatus0 = await this.checkApproval({token: this.token0, spender: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, rawAmount: prepareBalance0})
-        const approvalStatus1 = await this.checkApproval({token: this.token1, spender: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, rawAmount: prepareBalance1})
+        const approvalStatus0 = await this.checkApproval({token: this.token0, spender: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, rawAmount: rawToken0Amount})
+        const approvalStatus1 = await this.checkApproval({token: this.token1, spender: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, rawAmount: rawToken1Amount})
 
         if (!approvalStatus0 || !approvalStatus1){
             logger.error('Approve error')
             return
         }
 
-        const positionToMint = await this.constructNewPosition(this.token0, this.token1, prepareBalance0, prepareBalance1)
+        const positionToMint = await this.constructNewPosition(this.token0, this.token1, rawToken0Amount, rawToken1Amount)
 
         const block = await this.connection.provider.getBlock(this.connection.provider.getBlockNumber());
         const mintOptions = {
@@ -258,8 +322,15 @@ export class Uniswap {
         const txInfo = {
             data: calldata,
             to: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
-            value: value,
-            gasLimit: this.gasLimit,
+            value,
+        }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
         }
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
@@ -268,50 +339,45 @@ export class Uniswap {
             logger.error('Mint position transaction error!')
             return
         }
-
-        const currentDate = moment().format('DD.MM.YYYY');
-        const data = [currentDate, this.connection.wallet.address, 'Deposit', this.token0.name, balance0, price0, balance0 * price0, this.token1.name, balance1, price1, balance1 * price1]
-        logger.info(`data for write sheets: ${data}`)
-        await writeSheet('Liqudity', data)
     }
 
     // TODO: try me
-    async multiswap(tokenIn, tokenOut){
-        const swapRouterContract = new ethers.Contract(
-            this.swapRouterAddress,
-            V3SwapRouterABI.concat(PeripheryPaymentsABI).concat(MulticallABI)
-        )
-        const deadline = Math.floor(Date.now() / 1000) + 60 * 10
+    // async multiswap(tokenIn, tokenOut){
+    //     const swapRouterContract = new ethers.Contract(
+    //         this.swapRouterAddress,
+    //         V3SwapRouterABI.concat(PeripheryPaymentsABI).concat(MulticallABI)
+    //     )
+    //     const deadline = Math.floor(Date.now() / 1000) + 60 * 10
 
-        const params = {
-            tokenIn,
-            tokenOut,
-            fee: FeeAmount.MEDIUM,
-            recipient: this.connection.wallet.address,
-            deadline: deadline,
-            amountIn: ethers.utils.parseEther('1'),
-            amountOutMinimum: 0,
-            sqrtPriceLimitX96: 0
-        }
+    //     const params = {
+    //         tokenIn,
+    //         tokenOut,
+    //         fee: FeeAmount.MEDIUM,
+    //         recipient: this.connection.wallet.address,
+    //         deadline: deadline,
+    //         amountIn: ethers.utils.parseEther('1'),
+    //         amountOutMinimum: 0,
+    //         sqrtPriceLimitX96: 0
+    //     }
 
-        const encData1 = swapRouterContract.interface.encodeFunctionData("exactInputSingle", [params])
+    //     const encData1 = swapRouterContract.interface.encodeFunctionData("exactInputSingle", [params])
 
-        const calls = [encData1]
-        const encMultiCall = swapRouterContract.interface.encodeFunctionData("multicall", [calls])
+    //     const calls = [encData1]
+    //     const encMultiCall = swapRouterContract.interface.encodeFunctionData("multicall", [calls])
 
-        const txArgs = {
-            to: this.swapRouterAddress,
-            from: this.connection.wallet.address,
-            data: encMultiCall
-        }
+    //     const txArgs = {
+    //         to: this.swapRouterAddress,
+    //         from: this.connection.wallet.address,
+    //         data: encMultiCall
+    //     }
 
-        const tx = await this.connection.wallet.sendTransaction(transaction);
-        logger.info(`txInfo for swap: ${tx}`);
+    //     const tx = await this.connection.wallet.sendTransaction(transaction);
+    //     logger.info(`txInfo for swap: ${tx}`);
 
-        const receipt = await tx.wait();
+    //     const receipt = await tx.wait();
 
-        logger.info(`receipt for swap ${receipt}`); 
-    }
+    //     logger.info(`receipt for swap ${receipt}`); 
+    // }
 
 
     /**
@@ -346,11 +412,21 @@ export class Uniswap {
             options
         )
 
+        
+
         const txInfo = {
             data: route.methodParameters?.calldata,
             to: this.swapRouterAddress,
             value: route?.methodParameters?.value,
         }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
+        }   
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
@@ -358,33 +434,75 @@ export class Uniswap {
             logger.error('swap transaction error!')
             return
         }
+    }
 
-        // try{
-  
-        //     const gasPrice = await this.connection.getGasPrice()
+    async swapAndAddLiqudity({positionId, balance0, balance1}){
 
-        //     const tx = await this.connection.wallet.sendTransaction({
-        //         data: route.methodParameters?.calldata,
-        //         to: this.swapRouterAddress,
-        //         value: route?.methodParameters?.value,
-        //         from: this.connection.wallet.address,
-        //         gasLimit: this.gasLimit,
-        //         gasPrice
-        //         // maxFeePerGas: this.maxFeePerGas,
-        //         // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
-        //     })
+        const prepareBalance0 = ethers.utils.parseUnits((balance0 - MIN_BALANCE_TOKEN0).toFixed(this.token0.decimals), this.token0.decimals) 
+        const prepareBalance1 = ethers.utils.parseUnits((balance1 - MIN_BALANCE_TOKEN1).toFixed(this.token1.decimals), this.token1.decimals)
 
-        //     logger.info(`txInfo for swap:`, tx);
-        //     const receipt = await tx.wait();
+        const approvalStatus0 = await this.checkApproval({token: this.token0, spender: this.swapRouterAddress, rawAmount: prepareBalance0})
+        const approvalStatus1 = await this.checkApproval({token: this.token1, spender: this.swapRouterAddress, rawAmount: prepareBalance1})
+        if (!approvalStatus0 || !approvalStatus1){
+            logger.error('approvals error')
+            return 0
+        }
 
-        //     logger.info('swap transaction receipt', receipt)
-        //     return receipt.status
+        const network = await this.connection.provider.getNetwork()
+        const router = new AlphaRouter({ chainId: network.chainId, provider: this.connection.provider })
 
-        // } catch(e){
-        //     console.log(`Error while send transaction`, e.message)
-        //     return
-        // }
-    
+        const token0CurrencyAmount = CurrencyAmount.fromRawAmount(this.token0, prepareBalance0)
+        const token1CurrencyAmount = CurrencyAmount.fromRawAmount(this.token1, prepareBalance1)
+
+        const positionInfo = await this.getPositionInfo(positionId)
+        const currentPosition = await this.constructPositionWithPlaceholderLiquidity({token0: this.token0, token1: this.token1, positionInfo})
+        const swapAndAddConfig = {
+            ratioErrorTolerance: new Fraction(1, 100),
+            maxIterations: 6,
+          }
+
+        const swapAndAddOptions = {
+            swapOptions: {
+                type: SwapType.SWAP_ROUTER_02,
+                recipient: this.connection.wallet.address,
+                slippageTolerance: new Percent(50, 10_000),
+                deadline: Math.floor(Date.now() / 1000 + 1800),
+            },
+            addLiquidityOptions: {
+                tokenId: positionId,
+            },
+        }
+
+        const routeToRatioResponse = await router.routeToRatio(
+            token0CurrencyAmount,
+            token1CurrencyAmount,
+            currentPosition,
+            swapAndAddConfig,
+            swapAndAddOptions
+          )
+
+        if (!routeToRatioResponse ||routeToRatioResponse.status !== SwapToRatioStatus.SUCCESS){
+            logger.error(`Error while route to ratio`)
+            return 0
+        }
+
+        const route = routeToRatioResponse.result
+
+        const txInfo = {
+            data: route.methodParameters?.calldata,
+            to: this.swapRouterAddress,
+            value: route.methodParameters?.value,
+        }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
+        }
+
+        return this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME})
     }
 
     async removeLiquidity(positionId, poolInfo, positionInfo){
@@ -414,15 +532,18 @@ export class Uniswap {
         )
     
         // build transaction
-
         const txInfo = {
             data: calldata,
             to: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
             value: value.toString(),
-            // from: this.connection.wallet.address,
-            // maxFeePerGas: this.maxFeePerGas,
-            // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
-            // gasLimit: this.gasLimit,
+        }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
         }
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
@@ -432,25 +553,7 @@ export class Uniswap {
             return
         }
 
-        await sendMessageToTelegram(`Произошел вывод ликвидности для кошелька: ${this.connection.wallet.address} - номер позиции: ${positionId}`)
-
-    
-        // const tx = await this.connection.wallet.sendTransaction(transaction);
-    
-        // const receipt = await tx.wait();
-        // logger.info('receipt for remove liquidity', receipt);
-        // if (receipt.status == 1){
-        //     const currentDate = moment().format('DD.MM.YYYY');
-        //     const data = [currentDate, this.connection.wallet.address, 'test token', positionInfo.liquidity, 'test price']
-        //     try{
-        //         // await writeSheet('Liqudity', data)
-        //     } catch (e) {
-        //         logger.error(e)
-        //     }
-        // } else {
-        //     logger.error('Transaction error!')
-        // }
-        
+        await sendMessageToTelegram(`Произошел вывод ликвидности для кошелька: ${this.connection.wallet.address} - номер позиции: ${positionId}`)        
     }
 
     async checkAndRemovePosition(){
@@ -461,16 +564,16 @@ export class Uniswap {
             const positionInfo = await this.getPositionInfo(positionId);
         
             if (positionInfo.liquidity > 0 && (poolInfo.tick > positionInfo.tickUpper || poolInfo.tick < positionInfo.tickLower)){
+                await this.checkRewards(positionId)
                 await this.removeLiquidity(positionId, poolInfo, positionInfo);
             }
         }
     }
 
+    //deprecated
     async prepareBalanceAndMintPosition(){
         const {balance0, balance1} = await this.getTokenBalances()
         const {price0, price1} = await this.getTokenPrices()
-        logger.info(`price0: ${price0}`)
-        logger.info(`price1: ${price1}`)
         const sum0 = price0 * (balance0 - MIN_BALANCE_TOKEN0)
         const sum1 = price1 * (balance1 - MIN_BALANCE_TOKEN1)
         const differenceSum = Math.abs(sum0 - sum1)
@@ -479,6 +582,8 @@ export class Uniswap {
             logger.info('Balance not enough')
             return false
         }
+
+        logger.info(`differenceSum: ${differenceSum}`)
 
         if (differenceSum > MIN_DIFFERENCE_SUM){
             let amountIn = 0
@@ -508,31 +613,65 @@ export class Uniswap {
             }
         }
 
-        // const priceCoefficient = sum0/sum1
+        const {balance0: newBalance0, balance1: newBalance1} = await this.getTokenBalances()
 
-        // if (priceCoefficient > MAX_PRICE_COEFFICIENT){
-        //     // 1200 - 1000 / 2 / 1820
+        const prepareBalance0 = ethers.utils.parseUnits((newBalance0 - MIN_BALANCE_TOKEN0).toFixed(this.token0.decimals), this.token0.decimals) 
+        const prepareBalance1 = ethers.utils.parseUnits((newBalance1 - MIN_BALANCE_TOKEN1).toFixed(this.token1.decimals), this.token1.decimals)
 
-        //     const amountForSwap = (sum0 - sum1) / 2 / price0
-        //     logger.info('amountForSwap', amountForSwap)
-        //     const status = await this.swap(this.token0, this.token1, ethers.utils.parseUnits(amountForSwap.toFixed(this.token0.decimals), this.token0.decimals))
-        //     if (status != 1){
-        //         logger.error('Swap transaction error!', receipt)
-        //         return
-        //     }
+        await this.mintPosition({rawToken0Amount: prepareBalance0, rawToken1Amount: prepareBalance1})
+    }
 
-        // } else if (priceCoefficient < MIN_PRICE_COEFFICIENT){
-        //     // 800 - 1300 / 2 / 1.3
+    async mintPositionAndAddLiquidity(){
+        logger.info('start mint position and add liquidity')
 
-        //     const amountForSwap = (sum1 - sum0) / 2 / price1
-        //     logger.info('amountForSwap', amountForSwap)
-        //     const status = await this.swap(this.token1, this.token0, ethers.utils.parseUnits(amountForSwap.toFixed(this.token1.decimals), this.token1.decimals))
-        //     if (status != 1){
-        //         logger.error('Swap transaction error!', receipt)
-        //         return
-        //     }
-        // }
+        const {balance0, balance1} = await this.getTokenBalances()
+        const {price0, price1} = await this.getTokenPrices()
+        const sum0 = price0 * (balance0 - MIN_BALANCE_TOKEN0)
+        const sum1 = price1 * (balance1 - MIN_BALANCE_TOKEN1)
+        if (sum0 + sum1 <= MIN_SUM_BALANCE){
+            logger.info('Balance not enough')
+            return false
+        }
+
+        let positionId = await this.getLastActivePosition()
+        if (typeof positionId === 'undefined'){
+            const rawToken0Amount = ethers.utils.parseUnits(MIN_BALANCE_TOKEN0_FOR_MINT.toString(), this.token0.decimals) 
+            const rawToken1Amount = ethers.utils.parseUnits(MIN_BALANCE_TOKEN1_FOR_MINT.toString(), this.token1.decimals)
+            const mintStatus = await this.mintPosition({rawToken0Amount, rawToken1Amount})
+            let sle = randomIntInRange(50, 100);
+            logger.loinfog(`Задержка ${sle}с..`)
+            await sleep(sle * 1000)
+            positionId = await this.getLastActivePosition()
+        }
+
+        logger.info(`positionId: ${positionId}`)
+        if (typeof positionId === 'undefined'){
+            logger.error(`Not found active position`)
+            return false
+        }
+
+        for (let i = 0; i < RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY; i++){
+            const swapStatus = await this.swapAndAddLiqudity({positionId, balance0, balance1})
+            if (!swapStatus){
+                let sle = randomIntInRange(50, 100);
+                logger.loinfog(`Задержка ${sle}с..`)
+                await sleep(sle * 1000)
+                continue
+            }
+            const poolInfo = await this.getPoolInfo()
+            const positionInfo = await this.getPositionInfo(positionId)
+            const {amount0, amount1} = await getTokenAmountsFromPool(positionInfo.liquidity, poolInfo.sqrtPriceX96, positionInfo.tickLower, positionInfo.tickUpper, this.token0.decimals, this.token1.decimals)
+
+            const currentDate = moment().format('DD.MM.YYYY');
+            const data = [currentDate, this.connection.wallet.address, 'Deposit', this.token0.name, (+amount0).toPrecision(6), (+price0).toPrecision(5), Math.round(amount0 * price0), this.token1.name, (+amount1).toPrecision(6), (+price1).toPrecision(5), Math.round(amount1 * price1)]
+            logger.info(`data for write sheets: ${data}`)
+            await writeSheet('Liqudity', data)
+
+            return true
+
+        }
         
-        await this.mintPosition()
+        logger.error(`Error while swapAndAddLiqudity`)
+        return false
     }
 }
