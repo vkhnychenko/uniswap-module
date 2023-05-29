@@ -42,21 +42,10 @@ export class Connection {
     //     return {tokenSymbol, tokenDecimals, rawTokenBalance, tokenBalance}
     // }
 
-    async checkAvailableGas({gasPrice, gasLimit, value, chainName, transaction}){
+    async checkAvailableGas({chainName, transaction}){
         const {rawNativeBalance, nativeBalance} = await this.getNativeBalance()
-
-        if (transaction){
-            try{
-                const estimateGas = await this.provider.estimateGas(transaction);
-                console.log(`estimateGas: ${estimateGas}`)
-            } catch(e){
-                logger.error(`error while estimate gas ${e.message}`)
-            }
-            
-        }
         
-        logger.info(`gasLimit: ${gasLimit}`)
-        const needGas = gasPrice * gasLimit * 1.1 + +value
+        const needGas = transaction.gasPrice * transaction.gasLimit * 1.1 + transaction.value
         logger.info(`raw native balance: ${+rawNativeBalance}`)
         logger.info(`needGas: ${needGas}`)
         if (+rawNativeBalance < needGas){
@@ -68,8 +57,8 @@ export class Connection {
         return true
     }
 
-    async sendRawTransaction({txInfo, chainName}){
-        const {lastBaseFeePerGas, maxFeePerGas, maxPriorityFeePerGas, gasPrice}  = await this.provider.getFeeData()
+    async sendRawTransaction({chainName, txInfo}){
+        const {gasPrice}  = await this.provider.getFeeData()
         const nonce =  await this.wallet.getTransactionCount()
         const gasLimit = txInfo.gasLimit ? txInfo.gasLimit : DEFAULT_GAS_LIMIT
 
@@ -88,11 +77,11 @@ export class Connection {
 
         logger.info(`transaction: ${JSON.stringify(transaction)}`)
 
-        // const gasAvailable = await this.checkAvailableGas({gasPrice, gasLimit: DEFAULT_GAS_LIMIT, value: txInfo.value, chainName, transaction})
+        const gasAvailable = await this.checkAvailableGas({chainName, transaction})
 
-        // if (!gasAvailable){
-        //     return 0
-        // }
+        if (!gasAvailable){
+            return 0
+        }
 
         try {
 
@@ -117,12 +106,6 @@ export class Connection {
         logger.info(`Start transaction for wallet: ${this.wallet.address} in network: ${chainName}, gas: ${gasPrice}, gasLimit: ${gasLimit} - nonce: ${nonce}`)
         logger.info(...params)
 
-        // const gasAvailable = await this.checkAvailableGas({gasPrice, gasLimit, value, chainName})
-
-        // if (!gasAvailable){
-        //     return 0
-        // }
-
         const transaction = {
             from: this.wallet.address,
             gasLimit,
@@ -131,6 +114,12 @@ export class Connection {
             // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
             nonce,
             ...txInfo
+        }
+
+        const gasAvailable = await this.checkAvailableGas({chainName, transaction})
+
+        if (!gasAvailable){
+            return 0
         }
         
         try{

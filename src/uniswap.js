@@ -2,16 +2,16 @@ import { ethers } from "ethers"
 import moment from 'moment'
 import { Token, Percent, CurrencyAmount, TradeType, Fraction } from '@uniswap/sdk-core'
 import { getPrices } from "./helpers.js";
-import {writeSheet} from './googleSheets.js'
+import {writeSheet} from './sheets.js'
 import IUniswapV3PoolABI from '@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json' assert { type: "json" }
 import { nearestUsableTick, NonfungiblePositionManager, Pool, Position, computePoolAddress, FeeAmount } from '@uniswap/v3-sdk'
 import {AlphaRouter, SwapType, SwapToRatioStatus} from '@uniswap/smart-order-router'
 import { ERC20_ABI, NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, NONFUNGIBLE_POSITION_MANAGER_ABI, V3_SWAP_ROUTER_ADDRESS_02, POOL_FACTORY_CONTRACT_ADDRESS } from '../constants.js'
-import {logger, TICK_UPPER_MULTIPLIER, TICK_LOWER_MULTIPLIER, MAX_FEE_PER_GAS, MAX_PRIORITY_FEE_PER_GAS, MIN_SUM_BALANCE,
-    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, DEFAULT_GAS_LIMIT, CHAIN_NAME, MIN_DIFFERENCE_SUM, MIN_BALANCE_TOKEN0_FOR_MINT, MIN_BALANCE_TOKEN1_FOR_MINT} from '../config.js'
+import {logger, TICK_UPPER_MULTIPLIER, TICK_LOWER_MULTIPLIER, MIN_SUM_BALANCE,
+    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, DEFAULT_GAS_LIMIT, CHAIN_NAME, MIN_DIFFERENCE_SUM, MIN_BALANCE_TOKEN0_FOR_MINT, MIN_BALANCE_TOKEN1_FOR_MINT, RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY} from '../config.js'
 import { Connection } from "./provider.js";
 import { sendMessageToTelegram } from "./telegramBot.js";
-import { getTokenAmountsFromPool } from "./helpers.js";
+import { getTokenAmountsFromPool, sleep, randomIntInRange } from "./helpers.js";
 import dotenv from 'dotenv'
 dotenv.config()
 
@@ -21,8 +21,6 @@ export class Uniswap {
         this.token1 = token1;
         this.fee = fee
         this.gasLimit = DEFAULT_GAS_LIMIT
-        this.maxFeePerGas = MAX_FEE_PER_GAS
-        this.maxPriorityFeePerGas = MAX_PRIORITY_FEE_PER_GAS
         this.tickUpperMultiplier = TICK_UPPER_MULTIPLIER
         this.tickLowerMultiplier = TICK_LOWER_MULTIPLIER
         this.swapRouterAddress = V3_SWAP_ROUTER_ADDRESS_02
@@ -87,10 +85,10 @@ export class Uniswap {
         const feeToken1 = ((feeGrowthGlobal1X128 - feeGrowthOutside1X128_lower - feeGrowthOutside1X128_upper - positionInfo.feeGrowthInside1LastX128)/(2**128))*positionInfo.liquidity/(1*10**this.token1.decimals)
         logger.info(`feeToken0: ${feeToken0}, feeToken1: ${feeToken1}`)
 
-        await sendMessageToTelegram(`Накопленное вознаграждение для кошелька: ${this.connection.wallet.address}\nНомер позиции: ${positionId}\nToken0: ${feeToken0}\nToken1: ${feeToken1}`)
+        await sendMessageToTelegram(`Накопленное вознаграждение для кошелька: ${this.connection.wallet.address}\nНомер позиции: ${positionId}\nToken0: ${this.token0.name} - награда: ${feeToken0}\nToken1: ${this.token1.name} - награда: ${feeToken1}`)
 
         const currentDate = moment().format('DD.MM.YYYY');
-        const data = [currentDate, feeToken0, feeToken1]
+        const data = [currentDate, this.connection.wallet.address, this.token0.name, feeToken0, this.token1.name, feeToken1]
         logger.info(`data for write sheets: ${data}`)
         await writeSheet('Rewards', data)
 
@@ -178,7 +176,7 @@ export class Uniswap {
         }
 
         const gasEstimated = await tokenContract.estimateGas.approve(spender, rawAmount);
-        console.log('gasEstimated', +gasEstimated)
+        console.log('gasEstimated for allowance', +gasEstimated)
 
         const txInfo = {
             value: 0,
@@ -295,10 +293,6 @@ export class Uniswap {
 
     async mintPosition({rawToken0Amount, rawToken1Amount}){
         logger.info(`start mintPosition`)
-
-        // const {price0, price1} = await this.getTokenPrices()
-        // const balance0 = ethers.utils.formatUnits(rawToken0Amount, this.token0.decimals)
-        // const balance1 = ethers.utils.formatUnits(rawToken1Amount, this.token1.decimals) 
         
         const approvalStatus0 = await this.checkApproval({token: this.token0, spender: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, rawAmount: rawToken0Amount})
         const approvalStatus1 = await this.checkApproval({token: this.token1, spender: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, rawAmount: rawToken1Amount})
@@ -328,7 +322,15 @@ export class Uniswap {
         const txInfo = {
             data: calldata,
             to: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
-            value: value,
+            value,
+        }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
         }
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
@@ -337,50 +339,45 @@ export class Uniswap {
             logger.error('Mint position transaction error!')
             return
         }
-
-        // const currentDate = moment().format('DD.MM.YYYY');
-        // const data = [currentDate, this.connection.wallet.address, 'Mint position', this.token0.name, (+balance0).toPrecision(6), (+price0).toPrecision(5), Math.round(balance0 * price0), this.token1.name, (+balance1).toPrecision(6), (+price1).toPrecision(5), Math.round(balance1 * price1)]
-        // logger.info(`data for write sheets: ${data}`)
-        // await writeSheet('Liqudity', data)
     }
 
     // TODO: try me
-    async multiswap(tokenIn, tokenOut){
-        const swapRouterContract = new ethers.Contract(
-            this.swapRouterAddress,
-            V3SwapRouterABI.concat(PeripheryPaymentsABI).concat(MulticallABI)
-        )
-        const deadline = Math.floor(Date.now() / 1000) + 60 * 10
+    // async multiswap(tokenIn, tokenOut){
+    //     const swapRouterContract = new ethers.Contract(
+    //         this.swapRouterAddress,
+    //         V3SwapRouterABI.concat(PeripheryPaymentsABI).concat(MulticallABI)
+    //     )
+    //     const deadline = Math.floor(Date.now() / 1000) + 60 * 10
 
-        const params = {
-            tokenIn,
-            tokenOut,
-            fee: FeeAmount.MEDIUM,
-            recipient: this.connection.wallet.address,
-            deadline: deadline,
-            amountIn: ethers.utils.parseEther('1'),
-            amountOutMinimum: 0,
-            sqrtPriceLimitX96: 0
-        }
+    //     const params = {
+    //         tokenIn,
+    //         tokenOut,
+    //         fee: FeeAmount.MEDIUM,
+    //         recipient: this.connection.wallet.address,
+    //         deadline: deadline,
+    //         amountIn: ethers.utils.parseEther('1'),
+    //         amountOutMinimum: 0,
+    //         sqrtPriceLimitX96: 0
+    //     }
 
-        const encData1 = swapRouterContract.interface.encodeFunctionData("exactInputSingle", [params])
+    //     const encData1 = swapRouterContract.interface.encodeFunctionData("exactInputSingle", [params])
 
-        const calls = [encData1]
-        const encMultiCall = swapRouterContract.interface.encodeFunctionData("multicall", [calls])
+    //     const calls = [encData1]
+    //     const encMultiCall = swapRouterContract.interface.encodeFunctionData("multicall", [calls])
 
-        const txArgs = {
-            to: this.swapRouterAddress,
-            from: this.connection.wallet.address,
-            data: encMultiCall
-        }
+    //     const txArgs = {
+    //         to: this.swapRouterAddress,
+    //         from: this.connection.wallet.address,
+    //         data: encMultiCall
+    //     }
 
-        const tx = await this.connection.wallet.sendTransaction(transaction);
-        logger.info(`txInfo for swap: ${tx}`);
+    //     const tx = await this.connection.wallet.sendTransaction(transaction);
+    //     logger.info(`txInfo for swap: ${tx}`);
 
-        const receipt = await tx.wait();
+    //     const receipt = await tx.wait();
 
-        logger.info(`receipt for swap ${receipt}`); 
-    }
+    //     logger.info(`receipt for swap ${receipt}`); 
+    // }
 
 
     /**
@@ -415,11 +412,21 @@ export class Uniswap {
             options
         )
 
+        
+
         const txInfo = {
             data: route.methodParameters?.calldata,
             to: this.swapRouterAddress,
             value: route?.methodParameters?.value,
         }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
+        }   
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
@@ -427,33 +434,6 @@ export class Uniswap {
             logger.error('swap transaction error!')
             return
         }
-
-        // try{
-  
-        //     const gasPrice = await this.connection.getGasPrice()
-
-        //     const tx = await this.connection.wallet.sendTransaction({
-        //         data: route.methodParameters?.calldata,
-        //         to: this.swapRouterAddress,
-        //         value: route?.methodParameters?.value,
-        //         from: this.connection.wallet.address,
-        //         gasLimit: this.gasLimit,
-        //         gasPrice
-        //         // maxFeePerGas: this.maxFeePerGas,
-        //         // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
-        //     })
-
-        //     logger.info(`txInfo for swap:`, tx);
-        //     const receipt = await tx.wait();
-
-        //     logger.info('swap transaction receipt', receipt)
-        //     return receipt.status
-
-        // } catch(e){
-        //     console.log(`Error while send transaction`, e.message)
-        //     return
-        // }
-    
     }
 
     async swapAndAddLiqudity({positionId, balance0, balance1}){
@@ -465,11 +445,8 @@ export class Uniswap {
         const approvalStatus1 = await this.checkApproval({token: this.token1, spender: this.swapRouterAddress, rawAmount: prepareBalance1})
         if (!approvalStatus0 || !approvalStatus1){
             logger.error('approvals error')
-            return false
+            return 0
         }
-
-        // console.log('prepareBalance0', +prepareBalance0)
-        // console.log('prepareBalance1', +prepareBalance1)
 
         const network = await this.connection.provider.getNetwork()
         const router = new AlphaRouter({ chainId: network.chainId, provider: this.connection.provider })
@@ -479,13 +456,10 @@ export class Uniswap {
 
         const positionInfo = await this.getPositionInfo(positionId)
         const currentPosition = await this.constructPositionWithPlaceholderLiquidity({token0: this.token0, token1: this.token1, positionInfo})
-        // console.log('currentPosition', currentPosition)
         const swapAndAddConfig = {
             ratioErrorTolerance: new Fraction(1, 100),
             maxIterations: 6,
           }
-
-        // console.log('swapAndAddConfig', swapAndAddConfig)
 
         const swapAndAddOptions = {
             swapOptions: {
@@ -498,7 +472,6 @@ export class Uniswap {
                 tokenId: positionId,
             },
         }
-        // console.log('swapAndAddOptions', swapAndAddOptions)
 
         const routeToRatioResponse = await router.routeToRatio(
             token0CurrencyAmount,
@@ -508,12 +481,9 @@ export class Uniswap {
             swapAndAddOptions
           )
 
-        // console.log('routeToRatioResponse', routeToRatioResponse)
-        // console.log('estimatedGasUsed', +routeToRatioResponse.result.estimatedGasUsed)
-        // console.log('gasPriceWei', +routeToRatioResponse.result.gasPriceWei)
         if (!routeToRatioResponse ||routeToRatioResponse.status !== SwapToRatioStatus.SUCCESS){
             logger.error(`Error while route to ratio`)
-            return false
+            return 0
         }
 
         const route = routeToRatioResponse.result
@@ -522,8 +492,14 @@ export class Uniswap {
             data: route.methodParameters?.calldata,
             to: this.swapRouterAddress,
             value: route.methodParameters?.value,
-            // from: this.connection.wallet.address,
-            // gasLimit: 12324324,
+        }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
         }
 
         return this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME})
@@ -556,15 +532,18 @@ export class Uniswap {
         )
     
         // build transaction
-
         const txInfo = {
             data: calldata,
             to: NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS,
             value: value.toString(),
-            // from: this.connection.wallet.address,
-            // maxFeePerGas: this.maxFeePerGas,
-            // maxPriorityFeePerGas: this.maxPriorityFeePerGas,
-            // gasLimit: this.gasLimit,
+        }
+
+        try{
+            const gasLimit = await this.connection.provider.estimateGas(txInfo);
+            console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        } catch (e){
+            logger.error('Error while gas estimated')
+            logger.error(e.message)
         }
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
@@ -574,25 +553,7 @@ export class Uniswap {
             return
         }
 
-        await sendMessageToTelegram(`Произошел вывод ликвидности для кошелька: ${this.connection.wallet.address} - номер позиции: ${positionId}`)
-
-    
-        // const tx = await this.connection.wallet.sendTransaction(transaction);
-    
-        // const receipt = await tx.wait();
-        // logger.info('receipt for remove liquidity', receipt);
-        // if (receipt.status == 1){
-        //     const currentDate = moment().format('DD.MM.YYYY');
-        //     const data = [currentDate, this.connection.wallet.address, 'test token', positionInfo.liquidity, 'test price']
-        //     try{
-        //         // await writeSheet('Liqudity', data)
-        //     } catch (e) {
-        //         logger.error(e)
-        //     }
-        // } else {
-        //     logger.error('Transaction error!')
-        // }
-        
+        await sendMessageToTelegram(`Произошел вывод ликвидности для кошелька: ${this.connection.wallet.address} - номер позиции: ${positionId}`)        
     }
 
     async checkAndRemovePosition(){
@@ -676,7 +637,10 @@ export class Uniswap {
         if (typeof positionId === 'undefined'){
             const rawToken0Amount = ethers.utils.parseUnits(MIN_BALANCE_TOKEN0_FOR_MINT.toString(), this.token0.decimals) 
             const rawToken1Amount = ethers.utils.parseUnits(MIN_BALANCE_TOKEN1_FOR_MINT.toString(), this.token1.decimals)
-            await this.mintPosition({rawToken0Amount, rawToken1Amount})
+            const mintStatus = await this.mintPosition({rawToken0Amount, rawToken1Amount})
+            let sle = randomIntInRange(50, 100);
+            logger.loinfog(`Задержка ${sle}с..`)
+            await sleep(sle * 1000)
             positionId = await this.getLastActivePosition()
         }
 
@@ -686,21 +650,28 @@ export class Uniswap {
             return false
         }
 
-        
-        const status = await this.swapAndAddLiqudity({positionId, balance0, balance1})
+        for (let i = 0; i < RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY; i++){
+            const swapStatus = await this.swapAndAddLiqudity({positionId, balance0, balance1})
+            if (!swapStatus){
+                let sle = randomIntInRange(50, 100);
+                logger.loinfog(`Задержка ${sle}с..`)
+                await sleep(sle * 1000)
+                continue
+            }
+            const poolInfo = await this.getPoolInfo()
+            const positionInfo = await this.getPositionInfo(positionId)
+            const {amount0, amount1} = await getTokenAmountsFromPool(positionInfo.liquidity, poolInfo.sqrtPriceX96, positionInfo.tickLower, positionInfo.tickUpper, this.token0.decimals, this.token1.decimals)
 
-        if (!status){
-            logger.error(`Error while swapAndAddLiqudity`)
-            return false
+            const currentDate = moment().format('DD.MM.YYYY');
+            const data = [currentDate, this.connection.wallet.address, 'Deposit', this.token0.name, (+amount0).toPrecision(6), (+price0).toPrecision(5), Math.round(amount0 * price0), this.token1.name, (+amount1).toPrecision(6), (+price1).toPrecision(5), Math.round(amount1 * price1)]
+            logger.info(`data for write sheets: ${data}`)
+            await writeSheet('Liqudity', data)
+
+            return true
+
         }
-
-        const poolInfo = await this.getPoolInfo()
-        const positionInfo = await this.getPositionInfo(positionId)
-        const {amount0, amount1} = await getTokenAmountsFromPool(positionInfo.liquidity, poolInfo.sqrtPriceX96, positionInfo.tickLower, positionInfo.tickUpper, this.token0.decimals, this.token1.decimals)
-
-        const currentDate = moment().format('DD.MM.YYYY');
-        const data = [currentDate, this.connection.wallet.address, 'Deposit', this.token0.name, (+amount0).toPrecision(6), (+price0).toPrecision(5), Math.round(amount0 * price0), this.token1.name, (+amount1).toPrecision(6), (+price1).toPrecision(5), Math.round(amount1 * price1)]
-        logger.info(`data for write sheets: ${data}`)
-        await writeSheet('Liqudity', data)
+        
+        logger.error(`Error while swapAndAddLiqudity`)
+        return false
     }
 }
