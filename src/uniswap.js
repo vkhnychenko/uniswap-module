@@ -458,7 +458,7 @@ export class Uniswap {
         const currentPosition = await this.constructPositionWithPlaceholderLiquidity({token0: this.token0, token1: this.token1, positionInfo})
         const swapAndAddConfig = {
             ratioErrorTolerance: new Fraction(1, 100),
-            maxIterations: 6,
+            maxIterations: 10,
           }
 
         const swapAndAddOptions = {
@@ -639,7 +639,7 @@ export class Uniswap {
             const rawToken1Amount = ethers.utils.parseUnits(MIN_BALANCE_TOKEN1_FOR_MINT.toString(), this.token1.decimals)
             const mintStatus = await this.mintPosition({rawToken0Amount, rawToken1Amount})
             let sle = randomIntInRange(50, 100);
-            logger.loinfog(`Задержка ${sle}с..`)
+            logger.info(`Задержка ${sle}с..`)
             await sleep(sle * 1000)
             positionId = await this.getLastActivePosition()
         }
@@ -654,7 +654,7 @@ export class Uniswap {
             const swapStatus = await this.swapAndAddLiqudity({positionId, balance0, balance1})
             if (!swapStatus){
                 let sle = randomIntInRange(50, 100);
-                logger.loinfog(`Задержка ${sle}с..`)
+                logger.info(`Задержка ${sle}с..`)
                 await sleep(sle * 1000)
                 continue
             }
