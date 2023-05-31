@@ -7,7 +7,8 @@ async function main(){
     
     const uniswap = new Uniswap(TOKEN0, TOKEN1, FEE);
     await uniswap.checkAndRemovePosition()
-    await uniswap.prepareBalanceAndMintPosition()
+    // await uniswap.prepareBalanceAndMintPosition()
+    await uniswap.mintPositionAndAddLiquidity()
 }
 
 main()
