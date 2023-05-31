@@ -6,6 +6,7 @@
   "main": "uniswap.js",
   "scripts": {
     "farm": "node ./scripts/farm.js",
+    "rewards": "node ./scripts/checkRewards.js",
     "test": "node ./test.js",
     "rebalance": "node ./scripts/rebalance.js"
   },
