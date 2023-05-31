@@ -88,7 +88,7 @@ export class Uniswap {
         await sendMessageToTelegram(`Накопленное вознаграждение для кошелька: ${this.connection.wallet.address}\nНомер позиции: ${positionId}\nToken0: ${this.token0.name} - награда: ${feeToken0}\nToken1: ${this.token1.name} - награда: ${feeToken1}`)
 
         const currentDate = moment().format('DD.MM.YYYY');
-        const data = [currentDate, this.connection.wallet.address, this.token0.name, feeToken0, this.token1.name, feeToken1]
+        const data = [currentDate, this.connection.wallet.address, positionId, this.token0.name, feeToken0, this.token1.name, feeToken1]
         logger.info(`data for write sheets: ${data}`)
         await writeSheet('Rewards', data)
 
