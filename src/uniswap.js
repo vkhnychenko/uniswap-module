@@ -8,7 +8,7 @@ import { nearestUsableTick, NonfungiblePositionManager, Pool, Position, computeP
 import {AlphaRouter, SwapType, SwapToRatioStatus} from '@uniswap/smart-order-router'
 import { ERC20_ABI, NONFUNGIBLE_POSITION_MANAGER_CONTRACT_ADDRESS, NONFUNGIBLE_POSITION_MANAGER_ABI, V3_SWAP_ROUTER_ADDRESS_02, POOL_FACTORY_CONTRACT_ADDRESS } from '../constants.js'
 import {logger, TICK_UPPER_MULTIPLIER, TICK_LOWER_MULTIPLIER, MIN_SUM_BALANCE,
-    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, DEFAULT_GAS_LIMIT, CHAIN_NAME, MIN_DIFFERENCE_SUM, MIN_BALANCE_TOKEN0_FOR_MINT, MIN_BALANCE_TOKEN1_FOR_MINT, RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY} from '../config.js'
+    MIN_BALANCE_TOKEN0, MIN_BALANCE_TOKEN1, DEFAULT_GAS_LIMIT, CHAIN_NAME, MIN_DIFFERENCE_SUM, AMOUNT_TOKEN0_FOR_MINT, AMOUNT_TOKEN1_FOR_MINT, RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY} from '../config.js'
 import { Connection } from "./provider.js";
 import { sendMessageToTelegram } from "./telegramBot.js";
 import { getTokenAmountsFromPool, sleep, randomIntInRange } from "./helpers.js";
@@ -325,13 +325,13 @@ export class Uniswap {
             value,
         }
 
-        try{
-            const gasLimit = await this.connection.provider.estimateGas(txInfo);
-            console.log(`gasEstimated for mint position: ${+gasLimit}`)
-        } catch (e){
-            logger.error('Error while gas estimated')
-            logger.error(e.message)
-        }
+        // try{
+        //     const gasLimit = await this.connection.provider.estimateGas(txInfo);
+        //     console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        // } catch (e){
+        //     logger.error('Error while gas estimated')
+        //     logger.error(e.message)
+        // }
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
@@ -420,13 +420,13 @@ export class Uniswap {
             value: route?.methodParameters?.value,
         }
 
-        try{
-            const gasLimit = await this.connection.provider.estimateGas(txInfo);
-            console.log(`gasEstimated for mint position: ${+gasLimit}`)
-        } catch (e){
-            logger.error('Error while gas estimated')
-            logger.error(e.message)
-        }   
+        // try{
+        //     const gasLimit = await this.connection.provider.estimateGas(txInfo);
+        //     console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        // } catch (e){
+        //     logger.error('Error while gas estimated')
+        //     logger.error(e.message)
+        // }   
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
@@ -494,13 +494,13 @@ export class Uniswap {
             value: route.methodParameters?.value,
         }
 
-        try{
-            const gasLimit = await this.connection.provider.estimateGas(txInfo);
-            console.log(`gasEstimated for mint position: ${+gasLimit}`)
-        } catch (e){
-            logger.error('Error while gas estimated')
-            logger.error(e.message)
-        }
+        // try{
+        //     const gasLimit = await this.connection.provider.estimateGas(txInfo);
+        //     console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        // } catch (e){
+        //     logger.error('Error while gas estimated')
+        //     logger.error(e.message)
+        // }
 
         return this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME})
     }
@@ -538,13 +538,13 @@ export class Uniswap {
             value: value.toString(),
         }
 
-        try{
-            const gasLimit = await this.connection.provider.estimateGas(txInfo);
-            console.log(`gasEstimated for mint position: ${+gasLimit}`)
-        } catch (e){
-            logger.error('Error while gas estimated')
-            logger.error(e.message)
-        }
+        // try{
+        //     const gasLimit = await this.connection.provider.estimateGas(txInfo);
+        //     console.log(`gasEstimated for mint position: ${+gasLimit}`)
+        // } catch (e){
+        //     logger.error('Error while gas estimated')
+        //     logger.error(e.message)
+        // }
 
         const txStatus = await this.connection.sendRawTransaction({txInfo, chainName: CHAIN_NAME});
 
@@ -565,6 +565,9 @@ export class Uniswap {
         
             if (positionInfo.liquidity > 0 && (poolInfo.tick > positionInfo.tickUpper || poolInfo.tick < positionInfo.tickLower)){
                 await this.checkRewards(positionId)
+                let sle = randomIntInRange(10, 20);
+                logger.info(`Задержка ${sle}с..`)
+                await sleep(sle * 1000)
                 await this.removeLiquidity(positionId, poolInfo, positionInfo);
             }
         }
@@ -635,8 +638,8 @@ export class Uniswap {
 
         let positionId = await this.getLastActivePosition()
         if (typeof positionId === 'undefined'){
-            const rawToken0Amount = ethers.utils.parseUnits(MIN_BALANCE_TOKEN0_FOR_MINT.toString(), this.token0.decimals) 
-            const rawToken1Amount = ethers.utils.parseUnits(MIN_BALANCE_TOKEN1_FOR_MINT.toString(), this.token1.decimals)
+            const rawToken0Amount = ethers.utils.parseUnits(AMOUNT_TOKEN0_FOR_MINT.toString(), this.token0.decimals) 
+            const rawToken1Amount = ethers.utils.parseUnits(AMOUNT_TOKEN1_FOR_MINT.toString(), this.token1.decimals)
             const mintStatus = await this.mintPosition({rawToken0Amount, rawToken1Amount})
             let sle = randomIntInRange(50, 100);
             logger.info(`Задержка ${sle}с..`)
@@ -651,6 +654,7 @@ export class Uniswap {
         }
 
         for (let i = 0; i < RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY; i++){
+            const {balance0, balance1} = await this.getTokenBalances()
             const swapStatus = await this.swapAndAddLiqudity({positionId, balance0, balance1})
             if (!swapStatus){
                 let sle = randomIntInRange(50, 100);
@@ -666,6 +670,7 @@ export class Uniswap {
             const data = [currentDate, this.connection.wallet.address, 'Deposit', this.token0.name, (+amount0).toPrecision(6), (+price0).toPrecision(5), Math.round(amount0 * price0), this.token1.name, (+amount1).toPrecision(6), (+price1).toPrecision(5), Math.round(amount1 * price1)]
             logger.info(`data for write sheets: ${data}`)
             await writeSheet('Liqudity', data)
+            await sendMessageToTelegram(`Произошло добавление ликвидности для кошелька: ${this.connection.wallet.address} - номер позиции: ${positionId}`)  
 
             return true
 
