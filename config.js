@@ -21,7 +21,7 @@ export const RETRY_COUNT_SWAP_AND_ADD_LIQUIDITY = process.env.RETRY_COUNT_SWAP_A
 
 export const TOKEN0 = new Token(SupportedChainId.ARBITRUM_ONE, '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', 18, 'WETH', 'ETH')
 export const TOKEN1 = new Token(SupportedChainId.ARBITRUM_ONE, '0x912CE59144191C1204E64559FE8253a0e49E6548', 18, 'ARB', 'ARB')
-export const FEE = FeeAmount.MEDIUM
+export const FEE = FeeAmount.LOW
 export const AMOUNT_TOKEN0_FOR_MINT = process.env.AMOUNT_TOKEN0_FOR_MINT
 export const AMOUNT_TOKEN1_FOR_MINT = process.env.AMOUNT_TOKEN1_FOR_MINT
 
